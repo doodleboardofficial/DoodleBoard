@@ -1,0 +1,6 @@
+{
+  "name": "DoodleBoard",
+  "description": "A clean, minimal Pinterest-style visual board for doodles and drawings with masonry layout, upload, search, likes, follows, and profile management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
