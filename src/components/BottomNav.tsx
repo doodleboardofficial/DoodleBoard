@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Search, Plus, User as UserIcon } from 'lucide-react';
+import { Home, Search, PlusSquare, Heart, User as UserIcon } from 'lucide-react';
 import { TabType, User } from '../types';
 
 interface BottomNavProps {
@@ -7,6 +7,7 @@ interface BottomNavProps {
   setActiveTab: (tab: TabType) => void;
   onOpenUpload: () => void;
   currentUser: User | null;
+  unreadActivity?: boolean;
 }
 
 export const BottomNav: React.FC<BottomNavProps> = ({
@@ -14,79 +15,104 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   setActiveTab,
   onOpenUpload,
   currentUser,
+  unreadActivity = false,
 }) => {
   return (
-    <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-6 py-2 flex items-center justify-around shadow-lg">
-      
-      {/* Home Tab */}
+    <nav
+      id="instagram-bottom-nav"
+      aria-label="Bottom Navigation"
+      className="fixed bottom-0 left-0 right-0 z-40 bg-black/95 backdrop-blur-xl border-t border-neutral-900 px-4 py-2 flex items-center justify-around select-none"
+    >
+      {/* 1. Home Tab */}
       <button
         id="bottom-nav-home"
+        type="button"
         onClick={() => setActiveTab('home')}
-        className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-colors cursor-pointer ${
-          activeTab === 'home'
-            ? 'text-black font-bold'
-            : 'text-gray-400 hover:text-gray-900 font-medium'
+        aria-label="Home"
+        className={`p-2 transition-transform active:scale-75 cursor-pointer ${
+          activeTab === 'home' ? 'text-white' : 'text-zinc-400 hover:text-white'
         }`}
       >
-        <Home className={`w-5 h-5 ${activeTab === 'home' ? 'stroke-[2.5]' : ''}`} />
-        <span className="text-[10px]">Home</span>
+        <Home className={`w-6 h-6 ${activeTab === 'home' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
       </button>
 
-      {/* Search Tab */}
+      {/* 2. Search / Explore Tab */}
       <button
         id="bottom-nav-search"
+        type="button"
         onClick={() => setActiveTab('search')}
-        className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-colors cursor-pointer ${
-          activeTab === 'search'
-            ? 'text-black font-bold'
-            : 'text-gray-400 hover:text-gray-900 font-medium'
+        aria-label="Search and Explore"
+        className={`p-2 transition-transform active:scale-75 cursor-pointer ${
+          activeTab === 'search' ? 'text-white' : 'text-zinc-400 hover:text-white'
         }`}
       >
-        <Search className={`w-5 h-5 ${activeTab === 'search' ? 'stroke-[2.5]' : ''}`} />
-        <span className="text-[10px]">Search</span>
+        <Search className={`w-6 h-6 ${activeTab === 'search' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
       </button>
 
-      {/* Center + Upload Button */}
+      {/* 3. Create / PlusSquare */}
       <button
-        id="bottom-nav-add"
+        id="bottom-nav-create"
+        type="button"
         onClick={onOpenUpload}
-        aria-label="Upload New Doodle"
-        className="w-12 h-12 -mt-5 rounded-full bg-black text-white flex items-center justify-center shadow-xl hover:scale-105 active:scale-95 transition-transform cursor-pointer ring-4 ring-white"
+        aria-label="Create New Post"
+        className="p-2 text-zinc-400 hover:text-white transition-transform active:scale-75 cursor-pointer"
       >
-        <Plus className="w-6 h-6 stroke-[2.5]" />
+        <PlusSquare className="w-6 h-6 stroke-[1.8]" />
       </button>
 
-      {/* Profile Tab */}
+      {/* 4. Activity / Heart Tab */}
+      <button
+        id="bottom-nav-activity"
+        type="button"
+        onClick={() => setActiveTab('activity')}
+        aria-label="Activity and Notifications"
+        className={`p-2 relative transition-transform active:scale-75 cursor-pointer ${
+          activeTab === 'activity' ? 'text-white' : 'text-zinc-400 hover:text-white'
+        }`}
+      >
+        <Heart
+          className={`w-6 h-6 ${
+            activeTab === 'activity'
+              ? 'fill-white stroke-white'
+              : 'stroke-[1.8]'
+          }`}
+        />
+        {unreadActivity && (
+          <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#ff3040] ring-2 ring-black" />
+        )}
+      </button>
+
+      {/* 5. Profile Tab */}
       <button
         id="bottom-nav-profile"
+        type="button"
         onClick={() => setActiveTab('profile')}
-        className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-colors cursor-pointer ${
-          activeTab === 'profile'
-            ? 'text-black font-bold'
-            : 'text-gray-400 hover:text-gray-900 font-medium'
-        }`}
+        aria-label="Profile"
+        className="p-2 transition-transform active:scale-75 cursor-pointer"
       >
-        {currentUser?.avatarImage ? (
-          <img
-            src={currentUser.avatarImage}
-            alt={currentUser.name}
-            className={`w-5 h-5 rounded-full object-cover ${
-              activeTab === 'profile' ? 'ring-2 ring-black' : ''
-            }`}
-          />
-        ) : (
-          <div
-            className={`w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold ${
-              activeTab === 'profile' ? 'ring-2 ring-black' : ''
-            }`}
-            style={{ backgroundColor: currentUser?.avatarColor || '#000000' }}
-          >
-            {currentUser?.avatarLetter || 'JD'}
-          </div>
-        )}
-        <span className="text-[10px]">Profile</span>
+        <div
+          className={`w-6 h-6 rounded-full overflow-hidden p-[1px] transition-all ${
+            activeTab === 'profile'
+              ? 'ring-2 ring-white ring-offset-2 ring-offset-black'
+              : 'opacity-80 hover:opacity-100'
+          }`}
+        >
+          {currentUser?.avatarImage ? (
+            <img
+              src={currentUser.avatarImage}
+              alt={currentUser.name}
+              className="w-full h-full rounded-full object-cover"
+            />
+          ) : (
+            <div
+              className="w-full h-full rounded-full flex items-center justify-center text-white text-[10px] font-bold"
+              style={{ backgroundColor: currentUser?.avatarColor || '#3f3f46' }}
+            >
+              {currentUser?.avatarLetter || 'U'}
+            </div>
+          )}
+        </div>
       </button>
-
-    </div>
+    </nav>
   );
 };

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { HashRouter, useLocation, useNavigate } from 'react-router-dom';
 import { User, Post, TabType } from './types';
 import {
   getStoredUser,
@@ -14,7 +15,6 @@ import {
   saveStoredFollows,
   getStoredLikes,
   saveStoredLikes,
-  createNewUser,
   resetToDemoData,
 } from './services/storage';
 
@@ -22,26 +22,115 @@ import { supabaseAuth, supabaseDb, getSupabaseConfig } from './services/supabase
 import { Header } from './components/Header';
 import { HomeFeed } from './components/HomeFeed';
 import { SearchTab } from './components/SearchTab';
+import { ActivityTab } from './components/ActivityTab';
 import { ProfileTab } from './components/ProfileTab';
+import { PublicProfileView } from './components/PublicProfileView';
+import { GodAdminPanel } from './components/GodAdminPanel';
 import { BottomNav } from './components/BottomNav';
 import { FullscreenViewer } from './components/FullscreenViewer';
 import { UploadModal } from './components/UploadModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { SupabaseStatusModal } from './components/SupabaseStatusModal';
+import { resolveUserProfile, MockUserProfile, MOCK_USERS } from './services/mockUsers';
+import { useUserStore, StoredUser } from './store/userStore';
 
-export default function App() {
+function AppContent() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
   const [likedPostIds, setLikedPostIds] = useState<string[]>([]);
   const [followedUserIds, setFollowedUserIds] = useState<string[]>([]);
   
   const [activeTab, setActiveTab] = useState<TabType>('home');
+  const [previousTab, setPreviousTab] = useState<TabType>('home');
+  const [selectedProfileUser, setSelectedProfileUser] = useState<StoredUser | MockUserProfile | User | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+
+  const { toggleFollow, getUserByUsername, getUserById } = useUserStore();
+
+  // Helper to open a public profile by username or userId
+  const handleViewUserProfile = (usernameOrId: string) => {
+    if (activeTab !== 'public_profile') {
+      setPreviousTab(activeTab);
+    }
+    const clean = usernameOrId.replace(/^@/, '').toLowerCase();
+    const storedUserMatch = getUserByUsername(clean) || getUserById(usernameOrId);
+    
+    if (storedUserMatch) {
+      setSelectedProfileUser(storedUserMatch);
+    } else {
+      const resolved = resolveUserProfile(usernameOrId, currentUser, posts);
+      setSelectedProfileUser(resolved);
+    }
+
+    navigate(`/profile/${clean}`);
+    setActiveTab('public_profile');
+    setIsAdminOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleOpenAdmin = () => {
+    setIsAdminOpen(true);
+    navigate('/admin-pranjali-777');
+  };
+
+  const handleCloseAdmin = () => {
+    setIsAdminOpen(false);
+    navigate('/');
+  };
+
+  // Sync tab navigation with hash route
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    if (tab === 'home') navigate('/');
+    else if (tab === 'search') navigate('/search');
+    else if (tab === 'activity') navigate('/activity');
+    else if (tab === 'profile') navigate('/profile');
+  };
+
+  // Sync HashRouter URL with App State
+  useEffect(() => {
+    const path = location.pathname;
+    if (path.includes('admin-pranjali-777')) {
+      setIsAdminOpen(true);
+    } else if (path.startsWith('/profile/')) {
+      setIsAdminOpen(false);
+      const rawUsername = path.replace('/profile/', '').split('/')[0];
+      if (rawUsername) {
+        const clean = rawUsername.replace(/^@/, '').toLowerCase();
+        const stored = getUserByUsername(clean);
+        if (stored) {
+          setSelectedProfileUser(stored);
+        } else {
+          const resolvedProfile = resolveUserProfile(rawUsername, currentUser, posts);
+          setSelectedProfileUser(resolvedProfile);
+        }
+        setActiveTab('public_profile');
+      }
+    } else if (path === '/search') {
+      setIsAdminOpen(false);
+      setActiveTab('search');
+    } else if (path === '/activity') {
+      setIsAdminOpen(false);
+      setActiveTab('activity');
+    } else if (path === '/profile') {
+      setIsAdminOpen(false);
+      setActiveTab('profile');
+    } else if (path === '/' || path === '') {
+      setIsAdminOpen(false);
+      if (activeTab !== 'home' && activeTab !== 'public_profile') {
+        setActiveTab('home');
+      }
+    }
+  }, [location.pathname, posts, currentUser, getUserByUsername]);
 
   // Initialize data from Supabase / localStorage on mount
   useEffect(() => {
@@ -92,6 +181,29 @@ export default function App() {
           setLikedPostIds(getStoredLikes());
           setFollowedUserIds(getStoredFollows());
           setIsOnboardingOpen(true);
+        }
+
+        // 4. Check initial location or direct legacy pathname
+        const currentHashPath = window.location.hash.replace(/^#/, '');
+        const directPath = currentHashPath || window.location.pathname;
+
+        if (directPath.includes('admin-pranjali-777')) {
+          setIsAdminOpen(true);
+          navigate('/admin-pranjali-777');
+        } else if (directPath.startsWith('/profile/')) {
+          const rawUsername = directPath.replace('/profile/', '').split('/')[0];
+          if (rawUsername) {
+            const clean = rawUsername.replace(/^@/, '').toLowerCase();
+            const stored = getUserByUsername(clean);
+            if (stored) {
+              setSelectedProfileUser(stored);
+            } else {
+              const resolvedProfile = resolveUserProfile(rawUsername, user, initialPosts);
+              setSelectedProfileUser(resolvedProfile);
+            }
+            setActiveTab('public_profile');
+            navigate(`/profile/${clean}`);
+          }
         }
       } catch (err) {
         console.error('Initialization error:', err);
@@ -178,7 +290,7 @@ export default function App() {
     }
   };
 
-  // Handle Follow Toggle
+  // Handle Follow Toggle with userStore synchronization
   const handleFollowToggle = async (userIdToToggle: string) => {
     const isCurrentlyFollowing = followedUserIds.includes(userIdToToggle);
     const updatedFollows = isCurrentlyFollowing
@@ -187,6 +299,9 @@ export default function App() {
 
     setFollowedUserIds(updatedFollows);
     saveStoredFollows(updatedFollows);
+
+    // Also synchronize with Zustand real userStore
+    toggleFollow(userIdToToggle);
 
     const { isConfigured } = getSupabaseConfig();
     if (isConfigured && currentUser) {
@@ -200,6 +315,7 @@ export default function App() {
     setPosts(updated);
     saveStoredPosts(updated);
     setActiveTab('home');
+    navigate('/');
   };
 
   // Handle Delete Post
@@ -263,20 +379,22 @@ export default function App() {
 
   if (!isInitialized) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="w-9 h-9 rounded-full bg-red-600 animate-pulse" />
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="w-10 h-10 rounded-full p-[2.5px] bg-gradient-to-tr from-[#f09433] via-[#dc2743] to-[#bc1888] animate-spin">
+          <div className="w-full h-full rounded-full bg-black" />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-white text-gray-900 flex flex-col font-sans antialiased selection:bg-black selection:text-white pb-20 md:pb-6">
+    <div className="min-h-screen bg-black text-white flex flex-col font-sans antialiased selection:bg-neutral-800 selection:text-white pb-16">
       
       {/* Sticky Header */}
       <Header
         currentUser={currentUser}
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         onOpenUpload={handleOpenUpload}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
@@ -284,10 +402,9 @@ export default function App() {
       />
 
       {/* Main Content View Switcher */}
-      <main className="flex-1 w-full">
+      <main className="flex-1 w-full bg-black">
         {activeTab === 'home' && (
           <HomeFeed
-            posts={posts}
             currentUser={currentUser}
             likedPostIds={likedPostIds}
             followedUserIds={followedUserIds}
@@ -295,6 +412,7 @@ export default function App() {
             onFollowToggle={handleFollowToggle}
             onCardClick={(post) => setSelectedPost(post)}
             onOpenUpload={handleOpenUpload}
+            onViewUserProfile={handleViewUserProfile}
           />
         )}
 
@@ -309,6 +427,14 @@ export default function App() {
             onCardClick={(post) => setSelectedPost(post)}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
+            onViewUserProfile={handleViewUserProfile}
+          />
+        )}
+
+        {activeTab === 'activity' && (
+          <ActivityTab
+            currentUser={currentUser}
+            onViewUserProfile={handleViewUserProfile}
           />
         )}
 
@@ -325,15 +451,48 @@ export default function App() {
             onCardClick={(post) => setSelectedPost(post)}
             onResetDemoData={handleResetDemoData}
             onOpenSupabaseSetup={() => setIsSupabaseModalOpen(true)}
+            onOpenAdmin={handleOpenAdmin}
             onSignOut={handleSignOut}
+          />
+        )}
+
+        {activeTab === 'public_profile' && (
+          <PublicProfileView
+            user={selectedProfileUser || MOCK_USERS[0]}
+            currentUser={currentUser}
+            posts={posts}
+            likedPostIds={likedPostIds}
+            followedUserIds={followedUserIds}
+            onBack={() => {
+              navigate('/');
+              setActiveTab(previousTab === 'public_profile' ? 'home' : previousTab);
+            }}
+            onLikeToggle={handleLikeToggle}
+            onFollowToggle={handleFollowToggle}
+            onCardClick={(post) => setSelectedPost(post)}
+            onViewUserProfile={handleViewUserProfile}
+            onEditOwnProfile={() => {
+              setActiveTab('profile');
+              navigate('/profile');
+            }}
           />
         )}
       </main>
 
+      {/* God Admin Panel Modal / Overlay */}
+      {isAdminOpen && (
+        <GodAdminPanel
+          onClose={handleCloseAdmin}
+          onViewProfile={(uname) => {
+            handleViewUserProfile(uname);
+          }}
+        />
+      )}
+
       {/* Bottom Navigation for Mobile */}
       <BottomNav
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         onOpenUpload={handleOpenUpload}
         currentUser={currentUser}
       />
@@ -349,6 +508,7 @@ export default function App() {
           onLikeToggle={handleLikeToggle}
           onFollowToggle={handleFollowToggle}
           onDeletePost={handleDeletePost}
+          onViewUserProfile={handleViewUserProfile}
         />
       )}
 
@@ -389,3 +549,10 @@ export default function App() {
   );
 }
 
+export default function App() {
+  return (
+    <HashRouter>
+      <AppContent />
+    </HashRouter>
+  );
+}

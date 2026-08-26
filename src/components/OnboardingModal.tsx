@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Sparkles, ArrowRight, Mail, UserCheck, Lock, AlertCircle, Database } from 'lucide-react';
+import { Sparkles, ArrowRight, UserCheck, Lock, AlertCircle, Database, AtSign, Crown } from 'lucide-react';
 import { getRandomAvatarColor } from '../services/storage';
 import { supabaseAuth, getSupabaseConfig } from '../services/supabase';
+import { authenticateOrSignUpUser } from '../firebase';
+import { useUserStore } from '../store/userStore';
 import { User } from '../types';
 
 interface OnboardingModalProps {
@@ -20,7 +22,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   onComplete,
   onOpenSupabaseSetup,
 }) => {
-  const [authMode, setAuthMode] = useState<'anonymous' | 'email_signup' | 'email_login'>('anonymous');
+  const [authMode, setAuthMode] = useState<'username' | 'email_signup' | 'email_login'>('username');
+  const [usernameInput, setUsernameInput] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -30,10 +33,15 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const { isConfigured } = getSupabaseConfig();
+  const { addUser, getUserByUsername } = useUserStore();
 
   if (!isOpen) return null;
 
-  const previewLetter = name.trim() ? name.trim().charAt(0).toUpperCase() : 'D';
+  const previewLetter = name.trim()
+    ? name.trim().charAt(0).toUpperCase()
+    : usernameInput.trim()
+    ? usernameInput.trim().replace(/^@/, '').charAt(0).toUpperCase()
+    : 'P';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,49 +49,57 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     setLoading(true);
 
     try {
-      if (authMode === 'anonymous') {
-        if (!name.trim()) {
-          setErrorMessage('Please enter your name');
+      if (authMode === 'username') {
+        const cleanUser = usernameInput.trim().replace(/^@/, '').toLowerCase();
+        if (!cleanUser) {
+          setErrorMessage('Please enter a username (e.g. pranjali)');
           setLoading(false);
           return;
         }
 
-        if (isConfigured) {
-          // Attempt Supabase anonymous sign in or profile creation
-          const res = await supabaseAuth.signInAnonymously(name.trim());
-          if (res.error) {
-            console.warn('Supabase anonymous auth warning:', res.error);
-            // Fallback to local guest profile if anonymous auth is disabled on Supabase
-            const fallbackUser: User = {
-              id: 'user_' + Date.now().toString(36),
-              name: name.trim(),
-              username: `@${name.trim().toLowerCase().replace(/\s+/g, '_')}`,
-              avatarLetter: name.trim().charAt(0).toUpperCase(),
-              avatarColor: selectedColor,
-              bio: bio.trim() || 'Doodler on DoodleBoard',
-              createdAt: Date.now(),
-              isAnonymous: true,
-            };
-            onComplete(fallbackUser);
-          } else if (res.user) {
-            res.user.avatarColor = selectedColor;
-            if (bio) res.user.bio = bio;
-            onComplete(res.user);
-          }
-        } else {
-          // Local/Demo Mode
-          const fallbackUser: User = {
-            id: 'user_' + Date.now().toString(36),
-            name: name.trim(),
-            username: `@${name.trim().toLowerCase().replace(/\s+/g, '_')}`,
-            avatarLetter: name.trim().charAt(0).toUpperCase(),
-            avatarColor: selectedColor,
-            bio: bio.trim() || 'Doodler on DoodleBoard',
+        const isPranjali = cleanUser === 'pranjali';
+        const displayName = name.trim() || (isPranjali ? 'Pranjali Prasad' : cleanUser);
+
+        // 1. Create or retrieve Firestore user doc
+        const firestoreUser = await authenticateOrSignUpUser(cleanUser, displayName);
+
+        // 2. Ensure in userStore
+        const existing = getUserByUsername(cleanUser);
+        if (!existing) {
+          addUser({
+            id: firestoreUser.id,
+            username: cleanUser,
+            name: firestoreUser.name,
+            bio: firestoreUser.bio || (isPranjali ? '👑 Founder & Lead Creator @ DoodleBoard' : '🎨 DoodleBoard Creator'),
+            avatar: firestoreUser.avatar || (isPranjali
+              ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500&auto=format&fit=crop&q=80'
+              : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=500&auto=format&fit=crop&q=80'),
+            followers: firestoreUser.followersCount ?? 0,
+            following: firestoreUser.followingCount ?? 0,
+            verified: isPranjali ? true : Boolean(firestoreUser.verified),
+            owner: isPranjali ? true : Boolean(firestoreUser.owner),
+            banned: false,
+            featured: isPranjali ? true : Boolean(firestoreUser.featured),
             createdAt: Date.now(),
-            isAnonymous: true,
-          };
-          onComplete(fallbackUser);
+          });
         }
+
+        const appUser: User = {
+          id: firestoreUser.id,
+          name: firestoreUser.name,
+          username: `@${cleanUser}`,
+          avatarLetter: displayName.charAt(0).toUpperCase(),
+          avatarColor: isPranjali ? '#D97706' : selectedColor,
+          avatarImage: firestoreUser.avatar,
+          bio: firestoreUser.bio,
+          createdAt: Date.now(),
+          isOwner: isPranjali || Boolean(firestoreUser.owner),
+          isVerified: isPranjali || Boolean(firestoreUser.verified),
+          is_owner: isPranjali || Boolean(firestoreUser.owner),
+          is_verified: isPranjali || Boolean(firestoreUser.verified),
+        };
+
+        onComplete(appUser);
       } else if (authMode === 'email_signup') {
         if (!email.trim() || !password || !name.trim()) {
           setErrorMessage('Please fill in your name, email, and password');
@@ -142,7 +158,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   return (
     <div
       id="onboarding-modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-md overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md overflow-y-auto"
     >
       <div
         id="onboarding-modal-content"
@@ -157,7 +173,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             Welcome to DoodleBoard
           </h2>
           <p className="text-xs text-gray-500 max-w-xs mx-auto">
-            A visual Pinterest board for drawings, sketches, and digital art with Supabase backend.
+            Live Firebase & Firestore powered community for drawings, sketches & visual art.
           </p>
         </div>
 
@@ -166,14 +182,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           <button
             type="button"
             onClick={() => {
-              setAuthMode('anonymous');
+              setAuthMode('username');
               setErrorMessage(null);
             }}
             className={`flex-1 py-1.5 px-3 rounded-full transition-all cursor-pointer ${
-              authMode === 'anonymous' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+              authMode === 'username' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
             }`}
           >
-            Instant Doodler
+            Username Login
           </button>
           <button
             type="button"
@@ -182,25 +198,33 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               setErrorMessage(null);
             }}
             className={`flex-1 py-1.5 px-3 rounded-full transition-all cursor-pointer ${
-              authMode !== 'anonymous' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+              authMode !== 'username' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
             }`}
           >
-            Email Auth
+            Email / Supabase
           </button>
         </div>
 
-        {/* Live Avatar Preview (for name based setup) */}
+        {/* Live Avatar Preview */}
         {authMode !== 'email_login' && (
           <div className="flex flex-col items-center gap-2 py-1">
             <div
-              className="w-16 h-16 rounded-full flex items-center justify-center text-white font-black text-2xl shadow-md transition-all duration-300 ring-4 ring-gray-100"
-              style={{ backgroundColor: selectedColor }}
+              className={`w-16 h-16 rounded-full flex items-center justify-center text-white font-black text-2xl shadow-md transition-all duration-300 ring-4 ${
+                usernameInput.toLowerCase().trim() === 'pranjali'
+                  ? 'bg-gradient-to-tr from-amber-400 to-yellow-500 ring-amber-300'
+                  : 'ring-gray-100'
+              }`}
+              style={{
+                backgroundColor: usernameInput.toLowerCase().trim() === 'pranjali' ? undefined : selectedColor,
+              }}
             >
-              {previewLetter}
+              {usernameInput.toLowerCase().trim() === 'pranjali' ? '👑' : previewLetter}
             </div>
-            <span className="text-[11px] text-gray-400 font-medium">
-              Profile Avatar Preview
-            </span>
+            {usernameInput.toLowerCase().trim() === 'pranjali' && (
+              <span className="text-[11px] font-black text-amber-600 flex items-center gap-1">
+                <Crown className="w-3.5 h-3.5" /> Founder & Owner Account
+              </span>
+            )}
           </div>
         )}
 
@@ -215,31 +239,62 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         {/* Form Inputs */}
         <form onSubmit={handleSubmit} className="space-y-3.5 text-left">
           
-          {authMode !== 'email_login' && (
-            <div className="space-y-1">
-              <label className="block text-xs font-bold text-gray-800">
-                Your Creator Name <span className="text-red-600">*</span>
-              </label>
-              <input
-                id="onboarding-name-input"
-                type="text"
-                required
-                autoFocus
-                placeholder="e.g. Maya Chen or SketchyArt"
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  if (e.target.value.trim() && !selectedColor) {
-                    setSelectedColor(getRandomAvatarColor(e.target.value));
-                  }
-                }}
-                className="w-full px-4 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none transition-colors"
-              />
-            </div>
+          {authMode === 'username' && (
+            <>
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-gray-800 flex items-center justify-between">
+                  <span>Username <span className="text-red-600">*</span></span>
+                  <span className="text-[10px] text-gray-400">Hint: try "pranjali" for Owner</span>
+                </label>
+                <div className="relative">
+                  <input
+                    id="onboarding-username-input"
+                    type="text"
+                    required
+                    autoFocus
+                    placeholder="e.g. pranjali or maya_art"
+                    value={usernameInput}
+                    onChange={(e) => setUsernameInput(e.target.value)}
+                    className="w-full pl-8 pr-4 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none font-mono"
+                  />
+                  <AtSign className="w-4 h-4 text-gray-400 absolute left-2.5 top-3" />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-gray-800">
+                  Display Name <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <input
+                  id="onboarding-name-input"
+                  type="text"
+                  placeholder="e.g. Pranjali Prasad"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none"
+                />
+              </div>
+            </>
           )}
 
-          {authMode !== 'anonymous' && (
+          {authMode === 'email_signup' && (
             <>
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-gray-800">
+                  Your Creator Name <span className="text-red-600">*</span>
+                </label>
+                <input
+                  id="onboarding-name-input"
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="e.g. Maya Chen"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none transition-colors"
+                />
+              </div>
+
               <div className="space-y-1">
                 <label className="block text-xs font-bold text-gray-800">
                   Email Address <span className="text-red-600">*</span>
@@ -272,24 +327,42 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </>
           )}
 
-          {authMode === 'anonymous' && (
-            <div className="space-y-1">
-              <label className="block text-xs font-bold text-gray-800">
-                Short bio <span className="text-gray-400 font-normal">(optional)</span>
-              </label>
-              <input
-                id="onboarding-bio-input"
-                type="text"
-                placeholder="e.g. Passionate about ink sketches and doodles ✏️"
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
-                className="w-full px-4 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none transition-colors"
-              />
-            </div>
+          {authMode === 'email_login' && (
+            <>
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-gray-800">
+                  Email Address <span className="text-red-600">*</span>
+                </label>
+                <input
+                  id="onboarding-email-login-input"
+                  type="email"
+                  required
+                  placeholder="artist@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none transition-colors"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-gray-800">
+                  Password <span className="text-red-600">*</span>
+                </label>
+                <input
+                  id="onboarding-password-login-input"
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none transition-colors"
+                />
+              </div>
+            </>
           )}
 
-          {/* Color Chooser for Anonymous/Signup */}
-          {authMode !== 'email_login' && (
+          {/* Color Chooser for Username/Signup */}
+          {authMode === 'username' && (
             <div className="space-y-1.5 pt-1">
               <label className="block text-xs font-bold text-gray-800">
                 Avatar Accent Color
@@ -319,9 +392,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           >
             <span>
               {loading
-                ? 'Connecting...'
-                : authMode === 'anonymous'
-                ? 'Start Exploring DoodleBoard'
+                ? 'Authenticating...'
+                : authMode === 'username'
+                ? 'Join / Login with Username'
                 : authMode === 'email_signup'
                 ? 'Create Supabase Profile & Join'
                 : 'Sign In'}
@@ -330,7 +403,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           </button>
 
           {/* Switch between email sign up and login */}
-          {authMode !== 'anonymous' && (
+          {authMode !== 'username' && (
             <div className="text-center pt-1">
               {authMode === 'email_signup' ? (
                 <button
@@ -365,7 +438,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
             <span className="flex items-center gap-1.5">
               <span className={`w-2 h-2 rounded-full ${isConfigured ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-              {isConfigured ? 'Supabase Backend Connected' : 'Supabase (Demo/Setup Mode)'}
+              {isConfigured ? 'Supabase Backend Connected' : 'Firestore + Supabase (Dual)'}
             </span>
             <button
               type="button"

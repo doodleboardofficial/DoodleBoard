@@ -4,6 +4,11 @@ export interface User {
   username: string;
   email?: string;
   bio?: string;
+  website?: string;
+  location?: string;
+  category?: string;
+  followersCount?: number;
+  followingCount?: number;
   avatarLetter: string;
   avatarColor: string;
   avatarImage?: string;
@@ -19,12 +24,17 @@ export interface Post {
   id: string;
   title: string;
   src: string;
-  aspectRatio: number; // height / width
+  imageUrl?: string;
+  image_url?: string;
+  url?: string;
+  aspectRatio?: number; // height / width
   tags?: string[];
   userId: string;
   userName: string;
+  userUsername?: string;
   userAvatarBg?: string;
   userAvatarLetter?: string;
+  userAvatarImage?: string;
   isVerified?: boolean;
   isOwner?: boolean;
   is_verified?: boolean;
@@ -35,7 +45,7 @@ export interface Post {
   description?: string;
 }
 
-export type TabType = 'home' | 'search' | 'profile';
+export type TabType = 'home' | 'search' | 'activity' | 'profile' | 'public_profile';
 
 export type FilterCategory = 'All' | 'Minimalist' | 'Botanical' | 'Characters' | 'Architecture' | 'Animals' | 'Abstract' | 'Daily Life';
 

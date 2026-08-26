@@ -10,6 +10,7 @@ interface MasonryGridProps {
   onLikeToggle: (postId: string) => void;
   onFollowToggle: (userId: string) => void;
   onCardClick: (post: Post) => void;
+  onUserClick?: (userId: string, username?: string) => void;
 }
 
 export const MasonryGrid: React.FC<MasonryGridProps> = ({
@@ -20,6 +21,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
   onLikeToggle,
   onFollowToggle,
   onCardClick,
+  onUserClick,
 }) => {
   if (posts.length === 0) {
     return null;
@@ -44,6 +46,7 @@ export const MasonryGrid: React.FC<MasonryGridProps> = ({
             onLikeToggle={onLikeToggle}
             onFollowToggle={onFollowToggle}
             onCardClick={onCardClick}
+            onUserClick={onUserClick}
           />
         );
       })}

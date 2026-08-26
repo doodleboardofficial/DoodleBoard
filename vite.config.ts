@@ -5,6 +5,11 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: '/DoodleBoard/',
+    build: {
+      outDir: 'docs',
+      emptyOutDir: true,
+    },
     plugins: [react(), tailwindcss()],
         base: '/DoodleBoard/',
     resolve: {

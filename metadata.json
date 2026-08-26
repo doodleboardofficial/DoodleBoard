@@ -1,6 +1,6 @@
 {
   "name": "DoodleBoard",
-  "description": "A clean, minimal Pinterest-style visual board for doodles and drawings with masonry layout, upload, search, likes, follows, and profile management.",
+  "description": "An Instagram Dark UI visual feed for doodles and sketches with real-time Firebase Firestore synchronization, stories row, square aspect ratio posts, 5-icon bottom navigation, and creator profiles.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

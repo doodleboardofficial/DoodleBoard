@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Upload, Paintbrush, Image as ImageIcon, Sparkles, Undo2, Trash2, Check, Loader2 } from 'lucide-react';
+import { collection, addDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import { Post, User, FilterCategory } from '../types';
-import { supabaseDb, getSupabaseConfig } from '../services/supabase';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -20,7 +21,7 @@ const CATEGORIES: FilterCategory[] = [
   'Daily Life',
 ];
 
-const BRUSH_COLORS = ['#111111', '#555555', '#E11D48', '#2563EB', '#059669', '#D97706', '#7C3AED'];
+const BRUSH_COLORS = ['#FFFFFF', '#111111', '#E11D48', '#2563EB', '#059669', '#D97706', '#7C3AED'];
 const BRUSH_SIZES = [2, 5, 10, 18];
 
 export const UploadModal: React.FC<UploadModalProps> = ({
@@ -33,7 +34,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [description, setDescription] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<FilterCategory>('Minimalist');
   const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<number>(1.2);
+  const [aspectRatio, setAspectRatio] = useState<number>(1);
   const [mode, setMode] = useState<'upload' | 'draw'>('upload');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -41,7 +42,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   // Canvas drawing state
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [brushColor, setBrushColor] = useState('#111111');
+  const [brushColor, setBrushColor] = useState('#FFFFFF');
   const [brushSize, setBrushSize] = useState(4);
   const [isErasing, setIsErasing] = useState(false);
   const [history, setHistory] = useState<ImageData[]>([]);
@@ -50,26 +51,122 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Initialize canvas when switching to draw mode
+  useEffect(() => {
+    if (!isOpen) {
+      setTitle('');
+      setDescription('');
+      setImageSrc(null);
+      setSelectedFile(null);
+      setErrorMsg('');
+      setHistory([]);
+      setMode('upload');
+    }
+  }, [isOpen]);
+
+  // Init canvas with dark background
   useEffect(() => {
     if (mode === 'draw' && canvasRef.current) {
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = '#FFFFFF';
+      if (ctx && history.length === 0) {
+        ctx.fillStyle = '#121212';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        // Save initial blank state
         setHistory([ctx.getImageData(0, 0, canvas.width, canvas.height)]);
       }
     }
-  }, [mode]);
+  }, [mode, history.length]);
 
   if (!isOpen) return null;
 
-  // Compress & convert file to Base64 image
+  // Drawing Handlers
+  const getCanvasPos = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    let clientX = 0;
+    let clientY = 0;
+
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+    };
+  };
+
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    isDrawingRef.current = true;
+    lastPosRef.current = getCanvasPos(e);
+  };
+
+  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDrawingRef.current || !canvasRef.current || !lastPosRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    const currentPos = getCanvasPos(e);
+
+    ctx.beginPath();
+    ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
+    ctx.lineTo(currentPos.x, currentPos.y);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (isErasing) {
+      ctx.strokeStyle = '#121212';
+      ctx.lineWidth = brushSize * 2.5;
+    } else {
+      ctx.strokeStyle = brushColor;
+      ctx.lineWidth = brushSize;
+    }
+
+    ctx.stroke();
+    lastPosRef.current = currentPos;
+  };
+
+  const stopDrawing = () => {
+    if (!isDrawingRef.current || !canvasRef.current) return;
+    isDrawingRef.current = false;
+    lastPosRef.current = null;
+    const ctx = canvasRef.current.getContext('2d');
+    if (ctx) {
+      const snap = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
+      setHistory((prev) => [...prev.slice(-20), snap]);
+    }
+  };
+
+  const handleUndo = () => {
+    if (history.length <= 1 || !canvasRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+    const newHistory = history.slice(0, -1);
+    const previousState = newHistory[newHistory.length - 1];
+    ctx.putImageData(previousState, 0, 0);
+    setHistory(newHistory);
+  };
+
+  const handleClearCanvas = () => {
+    if (!canvasRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#121212';
+    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    const snap = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
+    setHistory([snap]);
+  };
+
   const handleFileProcess = (file: File) => {
     if (!file.type.startsWith('image/')) {
-      setErrorMsg('Please select a valid image file (PNG, JPG, WEBP, SVG)');
+      setErrorMsg('Please select a valid image file (PNG, JPG, WEBP, or SVG).');
       return;
     }
     setErrorMsg('');
@@ -77,37 +174,13 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
     const reader = new FileReader();
     reader.onload = (e) => {
-      const rawBase64 = e.target?.result as string;
+      const result = e.target?.result as string;
+      setImageSrc(result);
       const img = new Image();
       img.onload = () => {
-        // Calculate canvas compression to fit in localStorage safely
-        const maxDim = 1000;
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillRect(0, 0, width, height);
-          ctx.drawImage(img, 0, 0, width, height);
-          const compressed = canvas.toDataURL('image/jpeg', 0.82);
-          setImageSrc(compressed);
-          setAspectRatio(height / width);
-        }
+        setAspectRatio(img.width / img.height);
       };
-      img.src = rawBase64;
+      img.src = result;
     };
     reader.readAsDataURL(file);
   };
@@ -119,180 +192,84 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     }
   };
 
-  // Canvas drawing handlers
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    
-    // Scale coordinate based on canvas internal resolution
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-
-    const x = (clientX - rect.left) * scaleX;
-    const y = (clientY - rect.top) * scaleY;
-
-    isDrawingRef.current = true;
-    lastPosRef.current = { x, y };
-
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.beginPath();
-      ctx.arc(x, y, (isErasing ? brushSize * 2 : brushSize) / 2, 0, Math.PI * 2);
-      ctx.fillStyle = isErasing ? '#FFFFFF' : brushColor;
-      ctx.fill();
-    }
-  };
-
-  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isDrawingRef.current || !canvasRef.current || !lastPosRef.current) return;
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-
-    const currentX = (clientX - rect.left) * scaleX;
-    const currentY = (clientY - rect.top) * scaleY;
-
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.beginPath();
-      ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
-      ctx.lineTo(currentX, currentY);
-      ctx.strokeStyle = isErasing ? '#FFFFFF' : brushColor;
-      ctx.lineWidth = isErasing ? brushSize * 3 : brushSize;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.stroke();
-    }
-
-    lastPosRef.current = { x: currentX, y: currentY };
-  };
-
-  const stopDrawing = () => {
-    if (!isDrawingRef.current) return;
-    isDrawingRef.current = false;
-    lastPosRef.current = null;
-    
-    // Push to undo history
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext('2d');
-      if (ctx) {
-        const snapshot = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
-        setHistory((prev) => [...prev.slice(-15), snapshot]);
-      }
-    }
-  };
-
-  const handleUndo = () => {
-    if (history.length <= 1 || !canvasRef.current) return;
-    const newHistory = [...history];
-    newHistory.pop(); // remove current state
-    const previousState = newHistory[newHistory.length - 1];
-    const ctx = canvasRef.current.getContext('2d');
-    if (ctx && previousState) {
-      ctx.putImageData(previousState, 0, 0);
-      setHistory(newHistory);
-    }
-  };
-
-  const handleClearCanvas = () => {
-    if (!canvasRef.current) return;
-    const ctx = canvasRef.current.getContext('2d');
-    if (ctx) {
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-      setHistory([ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height)]);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg('');
-
     if (!title.trim()) {
-      setErrorMsg('Please give your doodle a title');
+      setErrorMsg('Please give your doodle a title.');
       return;
     }
 
     let finalSrc = imageSrc;
-
-    if (mode === 'draw') {
-      if (!canvasRef.current) {
-        setErrorMsg('Please draw something on the canvas');
-        return;
-      }
-      finalSrc = canvasRef.current.toDataURL('image/jpeg', 0.85);
+    if (mode === 'draw' && canvasRef.current) {
+      finalSrc = canvasRef.current.toDataURL('image/png');
     }
 
     if (!finalSrc) {
-      setErrorMsg('Please upload an image or sketch your doodle');
+      setErrorMsg('Please upload an image or draw something on the canvas.');
       return;
     }
 
     setIsSubmitting(true);
+    setErrorMsg('');
 
     try {
-      const { isConfigured } = getSupabaseConfig();
-      let publicImageUrl = finalSrc;
-
-      if (isConfigured) {
-        // Convert data URL to Blob for storage upload
-        let blobToUpload: Blob;
-        if (selectedFile) {
-          blobToUpload = selectedFile;
-        } else {
-          const res = await fetch(finalSrc);
-          blobToUpload = await res.blob();
-        }
-
-        // Upload to drawings bucket in Supabase Storage
-        publicImageUrl = await supabaseDb.uploadDrawing(
-          blobToUpload,
-          selectedFile?.name || 'doodle.jpg',
-          currentUser.id
-        );
-
-        // Insert into Supabase posts table
-        const createdPost = await supabaseDb.createPost({
-          userId: currentUser.id,
-          title: title.trim(),
-          imageUrl: publicImageUrl,
-        });
-
-        if (createdPost) {
-          createdPost.description = description.trim() || undefined;
-          createdPost.tags = [selectedCategory];
-          onPostCreated(createdPost);
-          setIsSubmitting(false);
-          onClose();
-          return;
-        }
-      }
-
-      // Fallback or Local mode
-      const newPost: Post = {
-        id: 'post_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6),
+      const newPostId = 'post_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+      const postPayload: Post = {
+        id: newPostId,
         title: title.trim(),
-        description: description.trim() || undefined,
-        src: publicImageUrl,
-        aspectRatio: aspectRatio || 1.2,
+        description: description.trim() || '',
+        imageUrl: finalSrc,
+        src: finalSrc,
+        aspectRatio: 1,
         tags: [selectedCategory],
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatarBg: currentUser.avatarColor,
-        userAvatarLetter: currentUser.avatarLetter,
+        userUsername: currentUser.username || currentUser.name.toLowerCase().replace(/\s+/g, '_'),
+        userAvatarBg: currentUser.avatarColor || '#18181b',
+        userAvatarLetter: currentUser.avatarLetter || currentUser.name.charAt(0).toUpperCase(),
+        userAvatarImage: currentUser.avatarImage || undefined,
+        isVerified: Boolean(currentUser.isVerified),
+        isOwner: Boolean(currentUser.isOwner),
+        is_verified: Boolean(currentUser.isVerified),
+        is_owner: Boolean(currentUser.isOwner),
         likes: 0,
         likedBy: [],
         timestamp: Date.now(),
       };
 
-      onPostCreated(newPost);
+      // Save to Firebase Firestore collection 'posts'
+      if (db) {
+        try {
+          const postsCol = collection(db, 'posts');
+          await addDoc(postsCol, {
+            title: postPayload.title,
+            description: postPayload.description,
+            imageUrl: postPayload.imageUrl,
+            src: postPayload.src,
+            aspectRatio: 1,
+            category: selectedCategory,
+            tags: [selectedCategory],
+            userId: currentUser.id,
+            userName: currentUser.name,
+            userUsername: postPayload.userUsername,
+            userAvatarBg: postPayload.userAvatarBg,
+            userAvatarLetter: postPayload.userAvatarLetter,
+            userAvatarImage: postPayload.userAvatarImage || null,
+            isVerified: Boolean(currentUser.isVerified),
+            isOwner: Boolean(currentUser.isOwner),
+            is_verified: Boolean(currentUser.isVerified),
+            is_owner: Boolean(currentUser.isOwner),
+            likes: 0,
+            likedBy: [],
+            timestamp: Date.now(),
+            createdAt: Date.now(),
+          });
+        } catch (firebaseErr) {
+          console.warn('Firestore addDoc error (falling back to local):', firebaseErr);
+        }
+      }
+
+      onPostCreated(postPayload);
       setIsSubmitting(false);
       onClose();
     } catch (err: any) {
@@ -305,42 +282,42 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   return (
     <div
       id="upload-modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-sm overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md overflow-y-auto"
       onClick={onClose}
     >
       <div
         id="upload-modal-content"
-        className="relative bg-white w-full max-w-2xl max-h-[92vh] rounded-3xl shadow-2xl overflow-y-auto border border-gray-100 p-5 sm:p-7"
+        className="relative bg-black text-white w-full max-w-2xl max-h-[92vh] rounded-2xl shadow-2xl overflow-y-auto border border-neutral-900 p-5 sm:p-7"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button */}
         <button
           id="close-upload-modal-btn"
           onClick={onClose}
-          className="absolute top-4 right-4 z-10 w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center transition-colors cursor-pointer"
+          className="absolute top-4 right-4 z-10 w-8 h-8 rounded-full bg-neutral-900 hover:bg-neutral-800 text-zinc-300 flex items-center justify-center border border-neutral-800 transition-colors cursor-pointer"
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4" />
         </button>
 
         {/* Modal Header */}
         <div className="mb-5">
-          <h2 className="text-xl font-bold text-gray-900 tracking-tight">
-            Upload to DoodleBoard
+          <h2 className="text-lg font-bold text-white tracking-tight">
+            Create New Doodle Post
           </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Share your sketches, line art, or digital drawings with the community
+          <p className="text-xs text-zinc-400 mt-0.5">
+            Share your drawings and creative line art with the community
           </p>
         </div>
 
         {/* Mode Switcher: Upload Image vs Draw Canvas */}
-        <div className="flex bg-gray-100 p-1 rounded-full mb-5 w-full max-w-xs mx-auto">
+        <div className="flex bg-neutral-900 p-1 rounded-xl mb-5 w-full max-w-xs mx-auto border border-neutral-800">
           <button
             type="button"
             onClick={() => setMode('upload')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-full text-xs font-bold transition-all cursor-pointer ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               mode === 'upload'
-                ? 'bg-white text-gray-900 shadow-xs'
-                : 'text-gray-600 hover:text-gray-900'
+                ? 'bg-neutral-800 text-white shadow-xs'
+                : 'text-zinc-400 hover:text-white'
             }`}
           >
             <ImageIcon className="w-3.5 h-3.5" />
@@ -349,10 +326,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           <button
             type="button"
             onClick={() => setMode('draw')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-full text-xs font-bold transition-all cursor-pointer ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               mode === 'draw'
-                ? 'bg-white text-gray-900 shadow-xs'
-                : 'text-gray-600 hover:text-gray-900'
+                ? 'bg-neutral-800 text-white shadow-xs'
+                : 'text-zinc-400 hover:text-white'
             }`}
           >
             <Paintbrush className="w-3.5 h-3.5" />
@@ -366,7 +343,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           {mode === 'upload' ? (
             <div className="space-y-3">
               {imageSrc ? (
-                <div className="relative rounded-2xl overflow-hidden bg-gray-50 border border-gray-200 max-h-72 flex items-center justify-center group">
+                <div className="relative rounded-xl overflow-hidden bg-neutral-950 border border-neutral-800 max-h-72 flex items-center justify-center group">
                   <img
                     src={imageSrc}
                     alt="Preview"
@@ -375,7 +352,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setImageSrc(null)}
-                    className="absolute top-3 right-3 px-3 py-1.5 bg-black/80 hover:bg-black text-white text-xs font-bold rounded-full shadow-md backdrop-blur-xs flex items-center gap-1 transition-transform active:scale-95 cursor-pointer"
+                    className="absolute top-3 right-3 px-3 py-1.5 bg-black/80 hover:bg-black text-white text-xs font-bold rounded-lg border border-neutral-800 backdrop-blur-xs flex items-center gap-1 transition-transform active:scale-95 cursor-pointer"
                   >
                     <Trash2 className="w-3 h-3" />
                     Replace Image
@@ -386,16 +363,16 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={handleDrop}
                   onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-gray-200 hover:border-gray-400 hover:bg-gray-50/70 transition-all rounded-2xl p-8 flex flex-col items-center justify-center text-center cursor-pointer min-h-[220px]"
+                  className="border-2 border-dashed border-neutral-800 hover:border-neutral-700 hover:bg-neutral-950 transition-all rounded-2xl p-8 flex flex-col items-center justify-center text-center cursor-pointer min-h-[220px]"
                 >
-                  <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 mb-3">
+                  <div className="w-12 h-12 rounded-full bg-neutral-900 flex items-center justify-center text-zinc-400 mb-3 border border-neutral-800">
                     <Upload className="w-6 h-6" />
                   </div>
-                  <p className="text-sm font-bold text-gray-800">
-                    Click to choose file or drag and drop
+                  <p className="text-xs font-bold text-zinc-200">
+                    Click to choose image or drag and drop
                   </p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    PNG, JPG, WEBP, or SVG (from camera or photo gallery)
+                  <p className="text-[11px] text-zinc-500 mt-1">
+                    PNG, JPG, WEBP, or SVG
                   </p>
                   <input
                     ref={fileInputRef}
@@ -414,7 +391,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           ) : (
             /* Doodle Canvas Pad */
             <div className="space-y-2">
-              <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-inner bg-white">
+              <div className="border border-neutral-800 rounded-xl overflow-hidden shadow-inner bg-neutral-950">
                 <canvas
                   ref={canvasRef}
                   width={600}
@@ -426,12 +403,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   onTouchStart={startDrawing}
                   onTouchMove={draw}
                   onTouchEnd={stopDrawing}
-                  className="w-full h-56 sm:h-64 object-contain bg-white cursor-crosshair touch-none"
+                  className="w-full h-56 sm:h-64 object-contain bg-[#121212] cursor-crosshair touch-none"
                 />
               </div>
 
               {/* Canvas Controls */}
-              <div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-gray-50 rounded-xl border border-gray-100 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-neutral-900 rounded-xl border border-neutral-800 text-xs">
                 {/* Palette */}
                 <div className="flex items-center gap-1.5">
                   {BRUSH_COLORS.map((c) => (
@@ -442,8 +419,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                         setBrushColor(c);
                         setIsErasing(false);
                       }}
-                      className={`w-5 h-5 rounded-full transition-transform cursor-pointer ${
-                        brushColor === c && !isErasing ? 'scale-125 ring-2 ring-black ring-offset-1' : ''
+                      className={`w-5 h-5 rounded-full transition-transform cursor-pointer border border-neutral-700 ${
+                        brushColor === c && !isErasing ? 'scale-125 ring-2 ring-white ring-offset-1 ring-offset-black' : ''
                       }`}
                       style={{ backgroundColor: c }}
                     />
@@ -451,10 +428,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsErasing(!isErasing)}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
                       isErasing
-                        ? 'bg-black text-white'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        ? 'bg-white text-black'
+                        : 'bg-neutral-800 text-zinc-300 hover:bg-neutral-700'
                     }`}
                   >
                     Eraser
@@ -463,14 +440,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
                 {/* Brush size */}
                 <div className="flex items-center gap-1">
-                  <span className="text-[11px] text-gray-500 font-medium">Size:</span>
+                  <span className="text-[11px] text-zinc-400 font-medium">Size:</span>
                   {BRUSH_SIZES.map((sz) => (
                     <button
                       key={sz}
                       type="button"
                       onClick={() => setBrushSize(sz)}
                       className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold cursor-pointer ${
-                        brushSize === sz ? 'bg-black text-white' : 'bg-gray-200 text-gray-700'
+                        brushSize === sz ? 'bg-white text-black' : 'bg-neutral-800 text-zinc-300'
                       }`}
                     >
                       {sz}
@@ -484,7 +461,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                     type="button"
                     onClick={handleUndo}
                     disabled={history.length <= 1}
-                    className="p-1 text-gray-600 hover:text-gray-900 disabled:opacity-40 cursor-pointer"
+                    className="p-1 text-zinc-400 hover:text-white disabled:opacity-40 cursor-pointer"
                     title="Undo"
                   >
                     <Undo2 className="w-4 h-4" />
@@ -492,7 +469,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   <button
                     type="button"
                     onClick={handleClearCanvas}
-                    className="p-1 text-gray-600 hover:text-red-600 cursor-pointer"
+                    className="p-1 text-zinc-400 hover:text-red-400 cursor-pointer"
                     title="Clear Canvas"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -504,23 +481,23 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
           {/* Title input */}
           <div className="space-y-1">
-            <label className="block text-xs font-bold text-gray-800">
-              Title <span className="text-red-600">*</span>
+            <label className="block text-xs font-semibold text-zinc-300">
+              Title <span className="text-[#ff3040]">*</span>
             </label>
             <input
               id="upload-title-input"
               type="text"
               required
-              placeholder="e.g., Midnight Cityscape or Sleeping Fox..."
+              placeholder="e.g., Midnight Botanical Lines..."
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-4 py-2.5 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none transition-colors"
+              className="w-full px-3.5 py-2 bg-neutral-900 rounded-xl border border-neutral-800 text-xs text-white placeholder-zinc-500 focus:border-neutral-700 focus:outline-none transition-colors"
             />
           </div>
 
           {/* Category Pill Selection */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-gray-800">
+            <label className="block text-xs font-semibold text-zinc-300">
               Category
             </label>
             <div className="flex flex-wrap gap-1.5">
@@ -529,10 +506,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   key={cat}
                   type="button"
                   onClick={() => setSelectedCategory(cat)}
-                  className={`text-xs px-3.5 py-1.5 rounded-full font-bold transition-colors cursor-pointer ${
+                  className={`text-xs px-3 py-1 rounded-full font-semibold transition-colors cursor-pointer ${
                     selectedCategory === cat
-                      ? 'bg-black text-white shadow-xs'
-                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                      ? 'bg-white text-black font-bold shadow-xs'
+                      : 'bg-neutral-900 hover:bg-neutral-800 text-zinc-300 border border-neutral-800'
                   }`}
                 >
                   {cat}
@@ -543,22 +520,22 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
           {/* Description input */}
           <div className="space-y-1">
-            <label className="block text-xs font-bold text-gray-800">
-              Description <span className="text-gray-400 font-normal">(optional)</span>
+            <label className="block text-xs font-semibold text-zinc-300">
+              Caption / Description <span className="text-zinc-500 font-normal">(optional)</span>
             </label>
             <textarea
               id="upload-desc-input"
               rows={2}
-              placeholder="Add some notes about your tools, inspiration, or technique..."
+              placeholder="Add caption, tags, or tools used..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full px-4 py-2 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-900 focus:bg-white focus:border-black focus:ring-1 focus:ring-black focus:outline-none transition-colors resize-none"
+              className="w-full px-3.5 py-2 bg-neutral-900 rounded-xl border border-neutral-800 text-xs text-white placeholder-zinc-500 focus:border-neutral-700 focus:outline-none transition-colors resize-none"
             />
           </div>
 
           {/* Error display */}
           {errorMsg && (
-            <p className="text-xs font-medium text-red-600 bg-red-50 px-3 py-2 rounded-lg">
+            <p className="text-xs font-medium text-red-400 bg-red-950/40 border border-red-900/50 px-3 py-2 rounded-lg">
               {errorMsg}
             </p>
           )}
@@ -568,7 +545,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 rounded-full text-xs font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors cursor-pointer"
+              className="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-300 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 transition-colors cursor-pointer"
             >
               Cancel
             </button>
@@ -576,10 +553,19 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               id="submit-upload-btn"
               type="submit"
               disabled={isSubmitting}
-              className="px-6 py-2.5 rounded-full text-xs font-bold text-white bg-black hover:bg-gray-800 transition-transform active:scale-95 shadow-xs disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-[#0095f6] hover:bg-[#1877f2] transition-transform active:scale-95 shadow-xs disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>{isSubmitting ? 'Publishing...' : 'Publish Doodle'}</span>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Sharing...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Share Doodle</span>
+                </>
+              )}
             </button>
           </div>
 
